@@ -3,6 +3,16 @@
 A GNOME image object eraser built with GTK4 + libadwaita.  
 Draw a mask over an unwanted object and erase it using classical inpainting or AI (LaMa).
 
+## Screenshots
+
+| Empty workspace | Image loaded |
+|---|---|
+| ![baEraser empty workspace](images/img1.jpg) | ![baEraser image loaded with LaMa AI selected](images/img2.jpg) |
+
+| Mask selected | Result after inpainting |
+|---|---|
+| ![baEraser mask selected for removal](images/img3.jpg) | ![baEraser result after LaMa AI inpainting](images/img4.jpg) |
+
 ## Installation
 
 ### AppImage
