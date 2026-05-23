@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=baEraser
+Comment=Remove objects from images using AI inpainting
+Exec=baEraser
+Icon=baEraser
+Type=Application
+Categories=Graphics;RasterGraphics;
+MimeType=image/jpeg;image/png;image/webp;image/bmp;image/tiff;
+StartupNotify=true

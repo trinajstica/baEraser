@@ -1,0 +1,69 @@
+# Local project notes
+AGENTS.md
+
+# Build outputs and staging directories
+build/
+AppDir/
+_flatpak_build/
+_flatpak_repo/
+_flatpak_stage/
+.flatpak-builder/
+CMakeFiles/
+cmake-build-*/
+CMakeCache.txt
+compile_commands.json
+
+# Downloaded third-party binaries and AI models
+third_party/
+models/*.onnx
+models/*.onnx.*
+
+# Generated release artifacts
+*.AppImage
+*.flatpak
+!baEraser.AppImage
+!baEraser.flatpak
+
+# Compiled binaries and libraries outside build directories
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Temporary files
+tmp/
+temp/
+.cache/
+.ccache/
+*.tmp
+*.temp
+*.part
+*.download
+*.tar.gz
+*.tgz
+*.zip
+*.bak
+*.swp
+*.swo
+*~
+
+# Logs and local diagnostics
+*.log
+*.out
+*.err
+core
+core.*
+
+# Editor and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local environment overrides and secrets
+.env
+.env.*
+*.local

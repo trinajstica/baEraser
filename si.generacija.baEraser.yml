@@ -1,0 +1,121 @@
+app-id: si.generacija.baEraser
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk//49
+command: baEraser-wrapper
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=home
+
+modules:
+
+  # ── Module 1: OpenCV 4.10.0 (built from source inside sandbox) ───────────
+  - name: opencv
+    buildsystem: cmake
+    builddir: true
+    # OpenCV cmake tries to download IPPICV and ADE at build time.
+    # We disable those and allow network only during the build phase.
+    build-options:
+      # Allow network during build (flatpak-builder blocks it by default,
+      # but we need it for optional OpenCV sub-downloads that we cannot
+      # easily pre-cache here; safer to just disable the downloads below).
+      env:
+        # Suppress warnings about missing Python numpy
+        OPENCV_PYTHON_DEBUG: '0'
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+      - -DBUILD_SHARED_LIBS=ON
+      # Only the modules baEraser needs
+      - -DBUILD_LIST=core,imgproc,imgcodecs,photo
+      # Disable optional extras that require network downloads at build time
+      - -DWITH_IPP=OFF
+      - -DBUILD_IPP_IW=OFF
+      - -DWITH_ADE=OFF
+      # Disable everything else we don't need
+      - -DBUILD_TESTS=OFF
+      - -DBUILD_PERF_TESTS=OFF
+      - -DBUILD_EXAMPLES=OFF
+      - -DBUILD_DOCS=OFF
+      - -DWITH_GTK=OFF
+      - -DWITH_QT=OFF
+      - -DWITH_OPENGL=OFF
+      - -DWITH_GSTREAMER=OFF
+      - -DWITH_FFMPEG=OFF
+      - -DWITH_V4L=OFF
+      - -DWITH_WEBP=OFF
+      - -DWITH_TIFF=OFF
+      - -DWITH_OPENEXR=OFF
+      - -DWITH_JASPER=OFF
+      - -DWITH_PROTOBUF=OFF
+      - -DWITH_LAPACK=OFF
+      - -DWITH_OPENBLAS=OFF
+      # Enable libjpeg and libpng (both in SDK)
+      - -DWITH_JPEG=ON
+      - -DWITH_PNG=ON
+      - -DWITH_ZLIB=ON
+      # Disable DNN (we use ONNX Runtime directly)
+      - -DBUILD_opencv_dnn=OFF
+      # Disable pkgconfig generation — OpenCVGenPkgconfig.cmake has cmake < 3.5
+      # which is incompatible with cmake 4.x. We set flags manually below.
+      - -DOPENCV_GENERATE_PKGCONFIG=OFF
+      # Allow cmake 4.x to handle old policies
+      - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    sources:
+      - type: archive
+        url: https://github.com/opencv/opencv/archive/refs/tags/4.10.0.tar.gz
+        sha256: b2171af5be6b26f7a06b1229948bbb2bdaa74fcf5cd097e0af6378fce50a6eb9
+
+  # ── Module 2: ONNX Runtime 1.26.0 (pre-built binary, glibc-compatible) ────
+  - name: onnxruntime
+    buildsystem: simple
+    build-commands:
+      - install -d /app/include/onnxruntime
+      - cp -r include/. /app/include/onnxruntime/
+      - install -Dm755 lib/libonnxruntime.so.1.26.0 /app/lib/libonnxruntime.so.1.26.0
+      - ln -sf libonnxruntime.so.1.26.0 /app/lib/libonnxruntime.so.1
+      - ln -sf libonnxruntime.so.1.26.0 /app/lib/libonnxruntime.so
+      - install -Dm755 lib/libonnxruntime_providers_shared.so /app/lib/libonnxruntime_providers_shared.so
+    sources:
+      - type: dir
+        path: third_party/onnxruntime-linux-x64-1.26.0
+
+  # ── Module 3: baEraser (built from source inside sandbox) ─────────────────
+  - name: baEraser
+    buildsystem: simple
+    build-commands:
+      # OpenCV flags set manually (no pkgconfig — OpenCVGenPkgconfig.cmake is
+      # incompatible with cmake 4.x, so we disabled pkgconfig generation).
+      - |
+        g++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter \
+          $(pkg-config --cflags gtk4 libadwaita-1) \
+          -I/app/include/opencv4 \
+          -I/app/include/onnxruntime \
+          src/main.cpp -o baEraser \
+          $(pkg-config --libs gtk4 libadwaita-1) \
+          -L/app/lib \
+          -lopencv_photo -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
+          -lonnxruntime \
+          -Wl,-rpath,/app/lib
+      - install -Dm755 baEraser /app/bin/baEraser
+      # LaMa models
+      - |
+        for model in models/*.onnx; do
+          [ -f "$model" ] && install -Dm644 "$model" "/app/models/$(basename "$model")"
+        done
+      # Desktop integration — icon must be named with app-id for flatpak
+      - install -Dm644 data/icons/baEraser.svg /app/share/icons/hicolor/scalable/apps/si.generacija.baEraser.svg
+      - install -d /app/share/applications
+      - |
+        sed 's/^Icon=baEraser/Icon=si.generacija.baEraser/' data/baEraser.desktop \
+          > /app/share/applications/si.generacija.baEraser.desktop
+      # Wrapper script: set model path
+      - |
+        printf '#!/bin/sh\nexport BAERASER_MODEL_PATH=/app/models\nexec /app/bin/baEraser "$@"\n' > /app/bin/baEraser-wrapper
+      - chmod +x /app/bin/baEraser-wrapper
+    sources:
+      - type: dir
+        path: .

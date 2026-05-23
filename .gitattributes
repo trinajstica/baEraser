@@ -1,0 +1,2 @@
+baEraser.flatpak filter=lfs diff=lfs merge=lfs -text
+baEraser.AppImage filter=lfs diff=lfs merge=lfs -text
