@@ -1015,7 +1015,8 @@ static void canvas_draw(GtkDrawingArea *da, cairo_t *cr, int w, int h, gpointer 
     cairo_restore(cr);
 
     // Draw rect selection preview (widget coords)
-    if (app->tool == DrawTool::RECT && app->is_drawing) {
+    if (app->tool == DrawTool::RECT && app->is_drawing &&
+        !app->is_moving_mask && !app->is_panning) {
         cairo_save(cr);
         double wx0 = draw_x + app->drag_start_x * app->zoom;
         double wy0 = draw_y + app->drag_start_y * app->zoom;
