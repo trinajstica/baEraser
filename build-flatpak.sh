@@ -13,6 +13,7 @@ MANIFEST="$SCRIPT_DIR/si.generacija.baEraser.yml"
 BUILD_DIR="$SCRIPT_DIR/_flatpak_build"
 REPO_DIR="$SCRIPT_DIR/_flatpak_repo"
 BUNDLE="$SCRIPT_DIR/baEraser.flatpak"
+RUNTIME_REPO="https://flathub.org/repo/flathub.flatpakrepo"
 
 echo "=== baEraser Flatpak builder ==="
 echo ""
@@ -60,6 +61,7 @@ echo ""
 echo "[2/3] Exporting .flatpak bundle..."
 rm -f "$BUNDLE"
 flatpak build-bundle \
+    --runtime-repo="$RUNTIME_REPO" \
     "$REPO_DIR" \
     "$BUNDLE" \
     "$APP_ID" \
