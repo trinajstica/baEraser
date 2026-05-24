@@ -5,23 +5,23 @@ Draw a mask over an unwanted object and erase it using classical inpainting or A
 
 ## Screenshots
 
-| Empty workspace | Image loaded |
+| img1 | img2 |
 |---|---|
 | ![img1](images/img1.jpg) | ![img2](images/img2.jpg) |
 
-| Mask selected | Result after inpainting |
+| img3 | img4 |
 |---|---|
 | ![img3](images/img3.jpg) | ![img4](images/img4.jpg) |
 
-| AI image loaded | Brush mask selected |
+| img5 | img6 |
 |---|---|
 | ![img5](images/img5.jpg) | ![img6](images/img6.jpg) |
 
-| Result after AI inpainting | Empty workspace |
+| img7 | img8 |
 |---|---|
 | ![img7](images/img7.jpg) | ![img8](images/img8.jpg) |
 
-| Image loaded | Mask selected |
+| img9 | img10 |
 |---|---|
 | ![img9](images/img9.jpg) | ![img10](images/img10.jpg) |
 
