@@ -39,7 +39,7 @@ Draw a mask over an unwanted object and erase it using classical inpainting or A
 
 ## Installation
 
-### AppImage
+### AppImage (tested only on Solus linux)
 
 ```bash
 chmod +x ./baEraser.AppImage
