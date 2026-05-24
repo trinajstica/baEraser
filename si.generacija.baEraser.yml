@@ -108,6 +108,8 @@ modules:
         done
       # Desktop integration — icon must be named with app-id for flatpak
       - install -Dm644 data/icons/baEraser.svg /app/share/icons/hicolor/scalable/apps/si.generacija.baEraser.svg
+      - install -d /app/share/icons/hicolor/scalable/actions
+      - install -m644 data/icons/hicolor/scalable/actions/*.svg /app/share/icons/hicolor/scalable/actions/
       - install -d /app/share/applications
       - |
         sed 's/^Icon=baEraser/Icon=si.generacija.baEraser/' data/baEraser.desktop \

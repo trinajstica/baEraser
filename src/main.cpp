@@ -77,6 +77,7 @@ static void finish_mask_change(AppState *app);
 static void cancel_mask_move(AppState *app);
 static void set_mask(AppState *app, cv::Mat mask, bool clear_clone_destination = false);
 static void clear_mask(AppState *app, bool clear_clone_destination = true);
+static void register_project_icons();
 
 // ─────────────────────────────────────────────
 // Enums
@@ -2005,6 +2006,27 @@ static void on_uri_launch_done(GObject *source_object, GAsyncResult *result, gpo
     if (error) g_error_free(error);
 }
 
+static void register_project_icons() {
+    std::vector<std::filesystem::path> candidates;
+
+    char exe_buf[4096] = {};
+    ssize_t len = readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        exe_buf[len] = '\0';
+        std::filesystem::path exe_dir = std::filesystem::path(exe_buf).parent_path();
+        candidates.push_back(exe_dir / "../share/icons");
+        candidates.push_back(exe_dir / "../data/icons");
+    }
+    candidates.push_back(std::filesystem::path("data/icons"));
+
+    GtkIconTheme *theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
+    for (const auto &path : candidates) {
+        if (std::filesystem::exists(path / "hicolor")) {
+            gtk_icon_theme_add_search_path(theme, path.string().c_str());
+        }
+    }
+}
+
 // ─────────────────────────────────────────────
 // Keyboard shortcuts
 // ─────────────────────────────────────────────
@@ -2088,6 +2110,7 @@ static void on_brush_size_changed(GtkRange *range, gpointer user_data) {
 // ─────────────────────────────────────────────
 static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     AppState *app = static_cast<AppState*>(user_data);
+    register_project_icons();
 
     // Find model directory — priority order:
     //  1. BAERASER_MODEL_PATH env var (set by AppRun wrapper)
@@ -2231,7 +2254,7 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     gtk_widget_add_css_class(tool_box, "linked");
 
     GtkWidget *btn_brush = gtk_toggle_button_new();
-    GtkWidget *brush_icon = gtk_image_new_from_icon_name("edit-symbolic");
+    GtkWidget *brush_icon = gtk_image_new_from_icon_name("baeraser-brush-symbolic");
     gtk_button_set_child(GTK_BUTTON(btn_brush), brush_icon);
     gtk_widget_set_tooltip_text(btn_brush, "Brush (B)");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(btn_brush), TRUE);
@@ -2240,7 +2263,7 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     gtk_box_append(GTK_BOX(tool_box), btn_brush);
 
     GtkWidget *btn_rect = gtk_toggle_button_new();
-    GtkWidget *rect_icon = gtk_image_new_from_icon_name("selection-rectangular-symbolic");
+    GtkWidget *rect_icon = gtk_image_new_from_icon_name("baeraser-rectangle-symbolic");
     gtk_button_set_child(GTK_BUTTON(btn_rect), rect_icon);
     gtk_widget_set_tooltip_text(btn_rect, "Rectangle selection (R)");
     g_signal_connect(btn_rect, "clicked", G_CALLBACK(on_tool_rect_clicked), app);
@@ -2315,18 +2338,18 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     GtkWidget *sep3 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_append(GTK_BOX(sidebar), sep3);
 
-    // Clear mask + Erase Object — side by side, linked style
+    // Clear mask + Erase Object + Fix It — side by side, linked style
     GtkWidget *action_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(action_box, "linked");
 
-    GtkWidget *btn_clear = gtk_button_new_from_icon_name("edit-clear-symbolic");
+    GtkWidget *btn_clear = gtk_button_new_from_icon_name("baeraser-clear-mask-symbolic");
     gtk_widget_set_tooltip_text(btn_clear, "Clear mask (Del)");
     gtk_widget_set_hexpand(btn_clear, TRUE);
     g_signal_connect(btn_clear, "clicked", G_CALLBACK(on_clear_mask_clicked), app);
     app->btn_clear_mask = GTK_BUTTON(btn_clear);
     gtk_box_append(GTK_BOX(action_box), btn_clear);
 
-    GtkWidget *btn_erase = gtk_button_new_from_icon_name("edit-clear-all-symbolic");
+    GtkWidget *btn_erase = gtk_button_new_from_icon_name("baeraser-erase-object-symbolic");
     gtk_widget_add_css_class(btn_erase, "destructive-action");
     gtk_widget_set_tooltip_text(btn_erase, "Erase Object (Ctrl+Enter)");
     gtk_widget_set_hexpand(btn_erase, TRUE);
@@ -2334,17 +2357,17 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     app->btn_erase = GTK_BUTTON(btn_erase);
     gtk_box_append(GTK_BOX(action_box), btn_erase);
 
-    gtk_box_append(GTK_BOX(sidebar), action_box);
-
     // Fix It button — auto-fills from surrounding region
-    GtkWidget *btn_fixit = gtk_button_new_with_label("Fix It");
+    GtkWidget *btn_fixit = gtk_button_new_from_icon_name("baeraser-fixit-symbolic");
     gtk_widget_set_tooltip_text(btn_fixit,
         "Fill marked area with surrounding texture (auto-detect source)");
     gtk_widget_add_css_class(btn_fixit, "suggested-action");
-    gtk_widget_set_size_request(btn_fixit, SIDEBAR_CONTROL_WIDTH, -1);
+    gtk_widget_set_hexpand(btn_fixit, TRUE);
     g_signal_connect(btn_fixit, "clicked", G_CALLBACK(on_fixit_clicked), app);
     app->btn_fixit = GTK_BUTTON(btn_fixit);
-    gtk_box_append(GTK_BOX(sidebar), btn_fixit);
+    gtk_box_append(GTK_BOX(action_box), btn_fixit);
+
+    gtk_box_append(GTK_BOX(sidebar), action_box);
 
     // Separator before clone-heal section
     GtkWidget *sep_clone = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
@@ -2382,31 +2405,36 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     app->lbl_clone_dest = GTK_LABEL(lbl_clone_dest);
     gtk_box_append(GTK_BOX(clone_card), lbl_clone_dest);
 
-    GtkWidget *btn_pick = gtk_button_new_with_label("1. Pick Source");
+    GtkWidget *clone_actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(clone_actions, "linked");
+
+    GtkWidget *btn_pick = gtk_button_new_from_icon_name("baeraser-clone-pick-source-symbolic");
     gtk_widget_set_tooltip_text(btn_pick,
         "Step 1: draw a rectangle over the clean region to copy from");
-    gtk_widget_set_size_request(btn_pick, SIDEBAR_CONTROL_WIDTH, -1);
+    gtk_widget_set_hexpand(btn_pick, TRUE);
     g_signal_connect(btn_pick, "clicked", G_CALLBACK(on_pick_source_clicked), app);
     app->btn_pick_source = GTK_BUTTON(btn_pick);
-    gtk_box_append(GTK_BOX(clone_card), btn_pick);
+    gtk_box_append(GTK_BOX(clone_actions), btn_pick);
 
-    GtkWidget *btn_clone = gtk_button_new_with_label("3. Clone Here");
+    GtkWidget *btn_clone = gtk_button_new_from_icon_name("baeraser-clone-here-symbolic");
     gtk_widget_set_tooltip_text(btn_clone,
         "Step 3: blend the source rectangle into the destination rectangle");
     gtk_widget_add_css_class(btn_clone, "suggested-action");
     gtk_widget_set_sensitive(btn_clone, FALSE);
-    gtk_widget_set_size_request(btn_clone, SIDEBAR_CONTROL_WIDTH, -1);
+    gtk_widget_set_hexpand(btn_clone, TRUE);
     g_signal_connect(btn_clone, "clicked", G_CALLBACK(on_clone_here_clicked), app);
     app->btn_clone_here = GTK_BUTTON(btn_clone);
-    gtk_box_append(GTK_BOX(clone_card), btn_clone);
+    gtk_box_append(GTK_BOX(clone_actions), btn_clone);
 
-    GtkWidget *btn_cancel_clone = gtk_button_new_with_label("Cancel Clone");
+    GtkWidget *btn_cancel_clone = gtk_button_new_from_icon_name("baeraser-clone-cancel-symbolic");
     gtk_widget_set_tooltip_text(btn_cancel_clone, "Cancel clone-heal and clear the source region");
     gtk_widget_set_sensitive(btn_cancel_clone, FALSE);
-    gtk_widget_set_size_request(btn_cancel_clone, SIDEBAR_CONTROL_WIDTH, -1);
+    gtk_widget_set_hexpand(btn_cancel_clone, TRUE);
     g_signal_connect(btn_cancel_clone, "clicked", G_CALLBACK(on_cancel_clone_clicked), app);
     app->btn_cancel_clone = GTK_BUTTON(btn_cancel_clone);
-    gtk_box_append(GTK_BOX(clone_card), btn_cancel_clone);
+    gtk_box_append(GTK_BOX(clone_actions), btn_cancel_clone);
+
+    gtk_box_append(GTK_BOX(clone_card), clone_actions);
 
     // Spacer
     GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

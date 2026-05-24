@@ -49,6 +49,7 @@ cp "data/baEraser.desktop"         "$APPDIR/usr/share/applications/baEraser.desk
 cp "data/baEraser.desktop"         "$APPDIR/$APP.desktop"
 cp "data/icons/baEraser.svg"       "$APPDIR/usr/share/icons/hicolor/scalable/apps/baEraser.svg"
 cp "data/icons/baEraser.svg"       "$APPDIR/baEraser.svg"
+cp -r "data/icons/hicolor/scalable/actions" "$APPDIR/usr/share/icons/hicolor/scalable/"
 
 # LaMa models (optional — only copy if present)
 for model in models/*.onnx; do
@@ -150,6 +151,7 @@ export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Avoid GTK4's GL/Vulkan renderer path on systems where Mesa/Zink/EGL is
 # incomplete or incompatible with AppImage runtime loading.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+export XDG_DATA_DIRS="$HERE/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 
 # Let the app find models relative to AppImage location
 export BAERASER_MODEL_PATH="$HERE/models"
