@@ -54,7 +54,7 @@ static void on_draw_drag_end(GtkGestureDrag *gesture, double dx, double dy, gpoi
 static void on_pan_drag_begin(GtkGestureDrag *gesture, double x, double y, gpointer user_data);
 static void on_pan_drag_update(GtkGestureDrag *gesture, double dx, double dy, gpointer user_data);
 static void on_pan_drag_end(GtkGestureDrag *gesture, double dx, double dy, gpointer user_data);
-static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer user_data);
+static gboolean on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer user_data);
 static void on_motion(GtkEventControllerMotion *ctrl, double x, double y, gpointer user_data);
 static void on_motion_leave(GtkEventControllerMotion *ctrl, gpointer user_data);
 static gboolean on_key_released(GtkEventControllerKey *ctrl,
@@ -789,10 +789,10 @@ static void load_image_from_path(AppState *app, const std::string &path) {
 
 static void update_canvas_size(AppState *app) {
     if (!app->has_image) return;
-    int w = (int)(app->current_image.cols * app->zoom);
-    int h = (int)(app->current_image.rows * app->zoom);
-    // minimum so canvas never shrinks below the viewport
-    gtk_widget_set_size_request(GTK_WIDGET(app->canvas), w, h);
+    // The image position is controlled only by pan_x/pan_y. Keep the drawing
+    // area as a stable viewport so GtkScrolledWindow cannot scroll the image
+    // independently while the user is drawing a mask.
+    gtk_widget_set_size_request(GTK_WIDGET(app->canvas), 1, 1);
 }
 
 // Fit image into the scrolled-window viewport (called via g_idle_add after layout)
@@ -1400,10 +1400,10 @@ static void on_motion_leave(GtkEventControllerMotion *ctrl, gpointer user_data) 
 }
 
 // ── Scroll: zoom toward mouse cursor ─────────
-static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer user_data) {
+static gboolean on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpointer user_data) {
     AppState *app = static_cast<AppState*>(user_data);
     (void)ctrl; (void)dx;
-    if (!app->has_image) return;
+    if (!app->has_image) return TRUE;
 
     double old_zoom = app->zoom;
     if (dy < 0) {
@@ -1436,6 +1436,7 @@ static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpoi
     gtk_label_set_text(app->zoom_label, buf);
 
     gtk_widget_queue_draw(GTK_WIDGET(app->canvas));
+    return TRUE;
 }
 
 // ─────────────────────────────────────────────
@@ -2485,14 +2486,16 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     gtk_box_append(GTK_BOX(main_box), canvas_container);
 
     GtkWidget *scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_NEVER);
     gtk_widget_set_hexpand(scrolled, TRUE);
     gtk_widget_set_vexpand(scrolled, TRUE);
     app->scrolled_window = scrolled;
     gtk_box_append(GTK_BOX(canvas_container), scrolled);
 
     GtkWidget *canvas = gtk_drawing_area_new();
-    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(canvas), 800);
-    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(canvas), 600);
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(canvas), 1);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(canvas), 1);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(canvas), canvas_draw, app, nullptr);
     app->canvas = GTK_DRAWING_AREA(canvas);
     gtk_widget_set_hexpand(canvas, TRUE);
