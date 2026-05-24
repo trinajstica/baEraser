@@ -61,10 +61,62 @@ echo "[3/5] Bundling libraries..."
 bundle_lib() {
     local lib="$1"
     local dest="$APPDIR/usr/lib"
+    local base soname
+
     if [ -f "$lib" ] && [ ! -f "$dest/$(basename "$lib")" ]; then
         cp -L "$lib" "$dest/"
         echo "      + $(basename "$lib")"
     fi
+
+    base="$(basename "$lib")"
+    soname="$(readelf -d "$lib" 2>/dev/null | awk -F'[][]' '/SONAME/{print $2; exit}')"
+    if [ -n "$soname" ] && [ "$soname" != "$base" ] && [ ! -e "$dest/$soname" ]; then
+        ln -s "$base" "$dest/$soname"
+        echo "      + $soname -> $base"
+    fi
+}
+
+is_system_or_host_gui_lib() {
+    local name="$1"
+
+    case "$name" in
+        ld-linux*|linux-vdso*|libanl.so.*|libBrokenLocale.so.*|libc.so.*|libdl.so.*|libm.so.*|libmvec.so.*|libnsl.so.*|libnss_*.so.*|libpthread.so.*|libresolv.so.*|librt.so.*|libthread_db.so.*|libutil.so.*)
+            return 0
+            ;;
+        libgtk-4.so.*|libadwaita-1.so.*|libgdk_pixbuf-2.0.so.*|libgio-2.0.so.*|libglib-2.0.so.*|libgmodule-2.0.so.*|libgobject-2.0.so.*|libgraphene-1.0.so.*|libpango-1.0.so.*|libpangocairo-1.0.so.*|libpangoft2-1.0.so.*|libcairo.so.*|libcairo-gobject.so.*|libharfbuzz.so.*|libfontconfig.so.*|libfreetype.so.*|libwayland-*.so.*|libxkbcommon.so.*)
+            return 0
+            ;;
+        libEGL.so.*|libGL.so.*|libGLES*.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libdrm.so.*|libgbm.so.*|libvulkan.so.*|libX11.so.*|libXau.so.*|libXdmcp.so.*|libXext.so.*|libXfixes.so.*|libXrender.so.*|libxcb.so.*|libxcb-*.so.*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+bundle_library_deps() {
+    local changed=1
+    local dep name
+
+    while [ "$changed" -eq 1 ]; do
+        changed=0
+        while IFS= read -r dep; do
+            [ -n "$dep" ] || continue
+            name="$(basename "$dep")"
+            if is_system_or_host_gui_lib "$name"; then
+                continue
+            fi
+            if [ ! -e "$APPDIR/usr/lib/$name" ]; then
+                bundle_lib "$dep"
+                changed=1
+            fi
+        done < <(
+            find "$APPDIR/usr/lib" -maxdepth 1 -type f -name '*.so*' -print0 |
+            xargs -0 -r ldd 2>/dev/null |
+            awk '/=> \// {print $3}' |
+            sort -u
+        )
+    done
 }
 
 # OpenCV libs (bundle — not commonly available on all distros)
@@ -78,6 +130,10 @@ for lib in "$ORT_LIB_DIR"/libonnxruntime*.so*; do
     [ -f "$lib" ] && bundle_lib "$lib"
 done
 
+# Runtime dependencies of bundled OpenCV / ORT libraries. In particular,
+# OpenCV imgcodecs may depend on OpenEXR, TIFF, AVIF, WebP, protobuf, etc.
+bundle_library_deps
+
 # GTK4, libadwaita, glib — intentionally NOT bundled:
 # these must come from the host system to get correct themes, renderers, and
 # platform integration. Bundling them causes more problems than it solves.
@@ -90,6 +146,10 @@ HERE="$(dirname "$(readlink -f "$0")")"
 
 # Prepend bundled libs so OpenCV / ORT are found
 export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Avoid GTK4's GL/Vulkan renderer path on systems where Mesa/Zink/EGL is
+# incomplete or incompatible with AppImage runtime loading.
+export GSK_RENDERER="${GSK_RENDERER:-cairo}"
 
 # Let the app find models relative to AppImage location
 export BAERASER_MODEL_PATH="$HERE/models"

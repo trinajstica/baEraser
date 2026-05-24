@@ -112,9 +112,14 @@ modules:
       - |
         sed 's/^Icon=baEraser/Icon=si.generacija.baEraser/' data/baEraser.desktop \
           > /app/share/applications/si.generacija.baEraser.desktop
-      # Wrapper script: set model path
+      # Wrapper script: set model path and use the GTK Cairo renderer by default
       - |
-        printf '#!/bin/sh\nexport BAERASER_MODEL_PATH=/app/models\nexec /app/bin/baEraser "$@"\n' > /app/bin/baEraser-wrapper
+        cat > /app/bin/baEraser-wrapper <<'EOF'
+        #!/bin/sh
+        export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+        export BAERASER_MODEL_PATH=/app/models
+        exec /app/bin/baEraser "$@"
+        EOF
       - chmod +x /app/bin/baEraser-wrapper
     sources:
       - type: dir
