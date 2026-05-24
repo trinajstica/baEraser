@@ -25,9 +25,17 @@ Draw a mask over an unwanted object and erase it using classical inpainting or A
 |---|---|
 | ![img9](images/img9.jpg) | ![img10](images/img10.jpg) |
 
-| Result after watermark removal |
+| img11 |
 |---|
 | ![img11](images/img11.jpg) |
+
+| img12 | img13 |
+|---|---|
+| ![img12](images/img12.jpg) | ![img13](images/img13.jpg) |
+
+| img14 |
+|---|
+| ![img14](images/img14.jpg) |
 
 ## Installation
 
