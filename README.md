@@ -13,6 +13,22 @@ Draw a mask over an unwanted object and erase it using classical inpainting or A
 |---|---|
 | ![baEraser mask selected for removal](images/img3.jpg) | ![baEraser result after LaMa AI inpainting](images/img4.jpg) |
 
+| AI image loaded | Brush mask selected |
+|---|---|
+| ![baEraser AI-generated image loaded](images/img5.jpg) | ![baEraser brush mask selected on AI-generated image](images/img6.jpg) |
+
+| Result after AI inpainting | Empty workspace |
+|---|---|
+| ![baEraser result after AI inpainting on generated image](images/img7.jpg) | ![baEraser empty workspace with updated controls](images/img8.jpg) |
+
+| Image loaded | Mask selected |
+|---|---|
+| ![baEraser image loaded with AI watermark](images/img9.jpg) | ![baEraser mask selected over AI watermark](images/img10.jpg) |
+
+| Result after watermark removal |
+|---|
+| ![baEraser result after AI watermark removal](images/img11.jpg) |
+
 ## Installation
 
 ### AppImage
