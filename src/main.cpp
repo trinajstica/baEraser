@@ -72,6 +72,7 @@ static void update_button_states(AppState *app);
 static void show_error_dialog(AppState *app, const std::string &message);
 static void show_info_dialog(AppState *app, const std::string &message);
 static void on_uri_launch_done(GObject *source_object, GAsyncResult *result, gpointer user_data);
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
 static void on_open_files(GtkApplication *gtk_app, GFile **files, gint n_files, const gchar *hint, gpointer user_data);
 static cv::Mat gdk_pixbuf_to_mat(GdkPixbuf *pixbuf);
 static gboolean fit_image_idle(gpointer user_data);
@@ -137,7 +138,9 @@ struct AppState {
     // Image data
     cv::Mat original_image;   // original loaded image (BGR)
     cv::Mat current_image;    // current working image (may be result of erase)
+    cv::Mat saved_image;      // last loaded/saved image, used for close confirmation
     cv::Mat mask;             // 8-bit single channel mask (255 = erase this)
+    bool    has_unsaved_image_changes = false;
 
     // Undo/Redo stacks — each entry stores {image, mask}
     struct Snapshot { cv::Mat image; cv::Mat mask; };
@@ -222,6 +225,21 @@ struct EraseJobResult {
     cv::Mat result;
     std::string status_message;
 };
+
+static bool images_differ(const cv::Mat &a, const cv::Mat &b) {
+    if (a.empty() || b.empty())
+        return !a.empty() || !b.empty();
+    if (a.size() != b.size() || a.type() != b.type())
+        return true;
+
+    cv::Mat diff;
+    cv::absdiff(a, b, diff);
+    return cv::countNonZero(diff.reshape(1)) > 0;
+}
+
+static void update_unsaved_image_state(AppState *app) {
+    app->has_unsaved_image_changes = images_differ(app->current_image, app->saved_image);
+}
 
 // ─────────────────────────────────────────────
 // Coordinate helpers
@@ -845,6 +863,8 @@ static void load_image_from_mat(AppState *app, const cv::Mat &image, const std::
     app->current_file_path = source_name;
     app->original_image = image.clone();
     app->current_image  = app->original_image.clone();
+    app->saved_image    = app->current_image.clone();
+    app->has_unsaved_image_changes = false;
     app->undo_stack.clear();
     app->redo_stack.clear();
     app->has_image = true;
@@ -1663,6 +1683,8 @@ static void on_save_clicked(GtkButton *btn, gpointer user_data) {
                     if (!ok) {
                         show_error_dialog(app, "Could not save image:\n" + spath);
                     } else {
+                        app->saved_image = app->current_image.clone();
+                        app->has_unsaved_image_changes = false;
                         gtk_label_set_text(app->status_label,
                             ("Saved: " + std::filesystem::path(spath).filename().string()).c_str());
                     }
@@ -1825,6 +1847,7 @@ static gboolean erase_done_cb(gpointer user_data) {
 
     if (!job->result.empty()) {
         app->current_image = job->result;
+        update_unsaved_image_state(app);
         clear_mask(app);
         rebuild_image_surface(app);
         gtk_label_set_text(app->status_label,
@@ -2150,6 +2173,7 @@ static void on_undo_clicked(GtkButton *btn, gpointer user_data) {
     app->current_image = snap.image;
     set_mask(app, snap.mask.clone(), false);
     app->undo_stack.pop_back();
+    update_unsaved_image_state(app);
 
     rebuild_image_surface(app);
     update_button_states(app);
@@ -2167,6 +2191,7 @@ static void on_redo_clicked(GtkButton *btn, gpointer user_data) {
     app->current_image = snap.image;
     set_mask(app, snap.mask.clone(), false);
     app->redo_stack.pop_back();
+    update_unsaved_image_state(app);
 
     rebuild_image_surface(app);
     update_button_states(app);
@@ -2269,6 +2294,35 @@ static void on_uri_launch_done(GObject *source_object, GAsyncResult *result, gpo
         show_error_dialog(app, message);
     }
     if (error) g_error_free(error);
+}
+
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
+    AppState *app = static_cast<AppState*>(user_data);
+    if (!app->has_image || !app->has_unsaved_image_changes)
+        return FALSE;
+
+    AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+        "Close without saving?",
+        "The image has unsaved changes. Closing now will discard them."));
+    adw_alert_dialog_add_response(dialog, "cancel", "Cancel");
+    adw_alert_dialog_add_response(dialog, "close", "Close Without Saving");
+    adw_alert_dialog_set_default_response(dialog, "cancel");
+    adw_alert_dialog_set_close_response(dialog, "cancel");
+    adw_alert_dialog_set_response_appearance(dialog, "close", ADW_RESPONSE_DESTRUCTIVE);
+
+    adw_alert_dialog_choose(dialog, GTK_WIDGET(window), nullptr,
+        [](GObject *source, GAsyncResult *result, gpointer data) {
+            AppState *app = static_cast<AppState*>(data);
+            const char *response = adw_alert_dialog_choose_finish(
+                ADW_ALERT_DIALOG(source), result);
+            if (g_strcmp0(response, "close") == 0) {
+                app->has_unsaved_image_changes = false;
+                gtk_window_destroy(GTK_WINDOW(app->window));
+            }
+        },
+        app);
+
+    return TRUE;
 }
 
 static void register_project_icons() {
@@ -2404,6 +2458,7 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     app->window = ADW_APPLICATION_WINDOW(adw_application_window_new(gtk_app));
     gtk_window_set_title(GTK_WINDOW(app->window), "baEraser");
     gtk_window_set_default_size(GTK_WINDOW(app->window), 1100, 780);
+    g_signal_connect(app->window, "close-request", G_CALLBACK(on_window_close_request), app);
 
     // ── Root layout: ToolbarView ──────────────
     AdwToolbarView *toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
