@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <thread>
 #include <atomic>
+#include <sstream>
 #include <unistd.h>
 
 // ─────────────────────────────────────────────
@@ -32,6 +33,8 @@
 struct AppState;
 static void on_open_clicked(GtkButton *btn, gpointer user_data);
 static void on_save_clicked(GtkButton *btn, gpointer user_data);
+static void on_copy_clicked(GtkButton *btn, gpointer user_data);
+static void on_paste_clicked(GtkButton *btn, gpointer user_data);
 static void on_erase_clicked(GtkButton *btn, gpointer user_data);
 static void on_undo_clicked(GtkButton *btn, gpointer user_data);
 static void on_redo_clicked(GtkButton *btn, gpointer user_data);
@@ -62,6 +65,8 @@ static gboolean on_key_released(GtkEventControllerKey *ctrl,
                                 GdkModifierType state, gpointer user_data);
 static gboolean drop_target_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user_data);
 static void load_image_from_path(AppState *app, const std::string &path);
+static void load_image_from_mat(AppState *app, const cv::Mat &image, const std::string &source_name);
+static bool try_load_image_from_path(AppState *app, const std::string &path);
 static void update_canvas_size(AppState *app);
 static void update_button_states(AppState *app);
 static void show_error_dialog(AppState *app, const std::string &message);
@@ -103,6 +108,8 @@ struct AppState {
     GtkWidget            *scrolled_window = nullptr;
     GtkButton            *btn_open = nullptr;
     GtkButton            *btn_save = nullptr;
+    GtkButton            *btn_copy = nullptr;
+    GtkButton            *btn_paste = nullptr;
     GtkButton            *btn_erase = nullptr;
     GtkButton            *btn_undo = nullptr;
     GtkButton            *btn_redo = nullptr;
@@ -577,6 +584,58 @@ static cv::Mat inpaint_clone_heal(const cv::Mat &bgr,
 }
 
 // ── Method 4: LaMa via ONNX Runtime ──────────────
+static cv::Rect lama_inference_rect(const cv::Mat &bgr, const cv::Mat &mask8) {
+    cv::Rect bbox = cv::boundingRect(mask8);
+    if (bbox.area() == 0) return cv::Rect(0, 0, bgr.cols, bgr.rows);
+
+    const int max_dim = std::max(bbox.width, bbox.height);
+    const int pad = std::clamp(max_dim, 96, 384);
+    cv::Rect rect(
+        bbox.x - pad,
+        bbox.y - pad,
+        bbox.width + pad * 2,
+        bbox.height + pad * 2);
+
+    // Prefer a square-ish crop so resizing to LaMa's 512x512 input distorts
+    // the local context less than resizing the whole image.
+    if (rect.width > rect.height) {
+        int add = rect.width - rect.height;
+        rect.y -= add / 2;
+        rect.height += add;
+    } else if (rect.height > rect.width) {
+        int add = rect.height - rect.width;
+        rect.x -= add / 2;
+        rect.width += add;
+    }
+
+    cv::Rect bounds(0, 0, bgr.cols, bgr.rows);
+    rect &= bounds;
+
+    // If the crop hit an image edge, expand back toward the opposite side when
+    // possible to keep the model input close to square.
+    int side = std::max(rect.width, rect.height);
+    if (rect.width < side) {
+        int missing = side - rect.width;
+        int left = std::min(missing / 2, rect.x);
+        int right = std::min(missing - left, bgr.cols - rect.x - rect.width);
+        left += std::min(missing - left - right, rect.x - left);
+        rect.x -= left;
+        rect.width += left + right;
+    }
+    if (rect.height < side) {
+        int missing = side - rect.height;
+        int top = std::min(missing / 2, rect.y);
+        int bottom = std::min(missing - top, bgr.rows - rect.y - rect.height);
+        top += std::min(missing - top - bottom, rect.y - top);
+        rect.y -= top;
+        rect.height += top + bottom;
+    }
+
+    rect &= bounds;
+    if (rect.area() == 0) return bounds;
+    return rect;
+}
+
 static cv::Mat inpaint_lama(AppState *app, const cv::Mat &bgr, const cv::Mat &mask8,
                             std::string *status_message) {
     if (!app->dnn_loaded || !app->ort_session) {
@@ -586,10 +645,14 @@ static cv::Mat inpaint_lama(AppState *app, const cv::Mat &bgr, const cv::Mat &ma
         return inpaint_patchmatch(bgr, mask8);
     }
 
+    const cv::Rect inference_rect = lama_inference_rect(bgr, mask8);
+    const cv::Mat bgr_input = bgr(inference_rect).clone();
+    const cv::Mat mask_input = mask8(inference_rect).clone();
+
     // ── Prepare float32 image blob [1, 3, 512, 512] ──────────────────────────
     cv::Mat img_resized, mask_resized;
-    cv::resize(bgr,   img_resized,  {512, 512});
-    cv::resize(mask8, mask_resized, {512, 512});
+    cv::resize(bgr_input,  img_resized,  {512, 512}, 0, 0, cv::INTER_AREA);
+    cv::resize(mask_input, mask_resized, {512, 512}, 0, 0, cv::INTER_NEAREST);
 
     // LaMa was trained on RGB — convert BGR → RGB before normalising
     cv::Mat img_rgb;
@@ -690,18 +753,18 @@ static cv::Mat inpaint_lama(AppState *app, const cv::Mat &bgr, const cv::Mat &ma
     cv::Mat merged;
     cv::cvtColor(merged_rgb, merged, cv::COLOR_RGB2BGR);  // → BGR
 
-    // Resize back to original image dimensions
-    cv::Mat result_full;
-    cv::resize(merged, result_full, {bgr.cols, bgr.rows});
+    // Resize back to the inference crop and composite into the original image.
+    cv::Mat result_crop;
+    cv::resize(merged, result_crop, bgr_input.size(), 0, 0, cv::INTER_CUBIC);
 
     // Composite: only replace masked pixels
     cv::Mat final_result = bgr.clone();
     cv::Mat mask_bool;
-    cv::threshold(mask8, mask_bool, 0, 255, cv::THRESH_BINARY);
-    result_full.copyTo(final_result, mask_bool);
+    cv::threshold(mask_input, mask_bool, 0, 255, cv::THRESH_BINARY);
+    result_crop.copyTo(final_result(inference_rect), mask_bool);
 
     cv::Mat diff;
-    cv::absdiff(bgr, final_result, diff);
+    cv::absdiff(bgr(inference_rect), result_crop, diff);
     cv::Scalar diff_mean = cv::mean(diff, mask_bool);
     double masked_delta = (diff_mean[0] + diff_mean[1] + diff_mean[2]) / 3.0;
     if (masked_delta < 1.0) {
@@ -712,7 +775,7 @@ static cv::Mat inpaint_lama(AppState *app, const cv::Mat &bgr, const cv::Mat &ma
     }
 
     if (status_message)
-        *status_message = "Done. LaMa AI applied.";
+        *status_message = "Done. LaMa AI applied to mask crop.";
     return final_result;
 }
 
@@ -741,23 +804,43 @@ static cv::Mat gdk_pixbuf_to_mat(GdkPixbuf *pixbuf) {
     return mat.clone();
 }
 
+static cv::Mat gdk_texture_to_mat(GdkTexture *texture) {
+    int width = gdk_texture_get_width(texture);
+    int height = gdk_texture_get_height(texture);
+    size_t stride = static_cast<size_t>(width) * 4;
+    std::vector<guchar> pixels(stride * height);
+    gdk_texture_download(texture, pixels.data(), stride);
 
+    cv::Mat bgra(height, width, CV_8UC4, pixels.data(), stride);
+    cv::Mat bgr;
+    cv::cvtColor(bgra, bgr, cv::COLOR_BGRA2BGR);
+    return bgr.clone();
+}
+
+static GdkTexture *mat_to_gdk_texture(const cv::Mat &bgr) {
+    cv::Mat rgba;
+    cv::cvtColor(bgr, rgba, cv::COLOR_BGR2RGBA);
+
+    const gsize stride = static_cast<gsize>(rgba.cols * 4);
+    const gsize bytes_len = static_cast<gsize>(stride * rgba.rows);
+    GBytes *bytes = g_bytes_new(rgba.data, bytes_len);
+    GdkTexture *texture = gdk_memory_texture_new(
+        rgba.cols, rgba.rows, GDK_MEMORY_R8G8B8A8, bytes, stride);
+    g_bytes_unref(bytes);
+    return texture;
+}
 
 // ─────────────────────────────────────────────
 // Image loading
 // ─────────────────────────────────────────────
-static void load_image_from_path(AppState *app, const std::string &path) {
-    GError *error = nullptr;
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(path.c_str(), &error);
-    if (!pixbuf || error) {
-        std::string msg = error ? error->message : "Unknown error";
-        if (error) g_error_free(error);
-        show_error_dialog(app, "Cannot open image:\n" + msg);
+static void load_image_from_mat(AppState *app, const cv::Mat &image, const std::string &source_name) {
+    if (image.empty()) {
+        show_error_dialog(app, "Cannot load an empty image.");
         return;
     }
 
-    app->current_file_path = path;
-    app->original_image = gdk_pixbuf_to_mat(pixbuf);
+    app->current_file_path = source_name;
+    app->original_image = image.clone();
     app->current_image  = app->original_image.clone();
     app->undo_stack.clear();
     app->redo_stack.clear();
@@ -769,22 +852,40 @@ static void load_image_from_path(AppState *app, const std::string &path) {
     app->pan_x = 0.0;
     app->pan_y = 0.0;
 
-    // Hide system cursor — we draw our own brush ring
     gtk_widget_set_cursor_from_name(GTK_WIDGET(app->canvas), "none");
 
-    g_object_unref(pixbuf);
     rebuild_image_surface(app);
     update_button_states(app);
 
-    // Status
-    std::string filename = std::filesystem::path(path).filename().string();
+    std::string filename = std::filesystem::path(source_name).filename().string();
+    if (filename.empty()) filename = "Clipboard image";
     std::string status = filename + "  " +
         std::to_string(app->current_image.cols) + "×" +
         std::to_string(app->current_image.rows) + " px";
     gtk_label_set_text(app->status_label, status.c_str());
 
-    // Schedule fit-to-window after layout pass
     g_idle_add(fit_image_idle, app);
+}
+
+static bool try_load_image_from_path(AppState *app, const std::string &path) {
+    GError *error = nullptr;
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(path.c_str(), &error);
+    if (!pixbuf || error) {
+        if (error) g_error_free(error);
+        return false;
+    }
+
+    cv::Mat image = gdk_pixbuf_to_mat(pixbuf);
+    g_object_unref(pixbuf);
+    load_image_from_mat(app, image, path);
+    return true;
+}
+
+static void load_image_from_path(AppState *app, const std::string &path) {
+    if (!try_load_image_from_path(app, path)) {
+        show_error_dialog(app, "Cannot open image:\n" + path);
+        return;
+    }
 }
 
 static void update_canvas_size(AppState *app) {
@@ -826,6 +927,8 @@ static void update_button_states(AppState *app) {
     bool clone_active = app->source_rect_set || app->clone_dest_set ||
         app->mode == AppMode::PICK_SOURCE || app->mode == AppMode::PICK_DEST;
     gtk_widget_set_sensitive(GTK_WIDGET(app->btn_save),        app->has_image);
+    gtk_widget_set_sensitive(GTK_WIDGET(app->btn_copy),        app->has_image);
+    gtk_widget_set_sensitive(GTK_WIDGET(app->btn_paste),       TRUE);
     gtk_widget_set_sensitive(GTK_WIDGET(app->btn_erase),       app->has_image && !clone_active);
     gtk_widget_set_sensitive(GTK_WIDGET(app->btn_fixit),       app->has_image && !clone_active);
     gtk_widget_set_sensitive(GTK_WIDGET(app->btn_clear_mask),  app->has_image);
@@ -1482,7 +1585,7 @@ static void on_open_clicked(GtkButton *btn, gpointer user_data) {
 
     // All image types filter
     GtkFileFilter *filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, "Slike");
+    gtk_file_filter_set_name(filter, "Images");
     gtk_file_filter_add_mime_type(filter, "image/*");
     GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
     g_list_store_append(filters, filter);
@@ -1553,6 +1656,146 @@ static void on_save_clicked(GtkButton *btn, gpointer user_data) {
         },
         app
     );
+}
+
+static void on_copy_clicked(GtkButton *btn, gpointer user_data) {
+    AppState *app = static_cast<AppState*>(user_data);
+    (void)btn;
+    if (!app->has_image) return;
+
+    GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(app->window));
+    if (!display) {
+        show_error_dialog(app, "Clipboard is not available.");
+        return;
+    }
+
+    GdkTexture *texture = mat_to_gdk_texture(app->current_image);
+    GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+    gdk_clipboard_set_texture(clipboard, texture);
+    g_object_unref(texture);
+    gtk_label_set_text(app->status_label, "Copied image to clipboard.");
+}
+
+static std::string clipboard_line_to_path(std::string line) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+        line.pop_back();
+    if (line.empty() || line[0] == '#') return "";
+    if (line == "copy" || line == "cut") return "";
+
+    if (line.rfind("file://", 0) == 0) {
+        GError *error = nullptr;
+        gchar *path = g_filename_from_uri(line.c_str(), nullptr, &error);
+        if (!path) {
+            if (error) g_error_free(error);
+            return "";
+        }
+        std::string result(path);
+        g_free(path);
+        return result;
+    }
+
+    if (!line.empty() && line[0] == '/')
+        return line;
+
+    return "";
+}
+
+static bool load_first_clipboard_file(AppState *app, const std::string &payload) {
+    std::istringstream lines(payload);
+    std::string line;
+    while (std::getline(lines, line)) {
+        std::string path = clipboard_line_to_path(line);
+        if (path.empty()) continue;
+        if (try_load_image_from_path(app, path)) {
+            gtk_label_set_text(app->status_label,
+                ("Pasted image file: " +
+                 std::filesystem::path(path).filename().string()).c_str());
+            return true;
+        }
+    }
+    return false;
+}
+
+static void read_clipboard_file_list(AppState *app, GdkClipboard *clipboard) {
+    static const char *mime_types[] = {
+        "x-special/gnome-copied-files",
+        "text/uri-list",
+        "text/plain",
+        nullptr
+    };
+
+    gdk_clipboard_read_async(clipboard, mime_types, G_PRIORITY_DEFAULT, nullptr,
+        [](GObject *source, GAsyncResult *result, gpointer data) {
+            AppState *app = static_cast<AppState*>(data);
+            GError *error = nullptr;
+            const char *mime_type = nullptr;
+            GInputStream *stream = gdk_clipboard_read_finish(
+                GDK_CLIPBOARD(source), result, &mime_type, &error);
+
+            if (!stream) {
+                if (error) g_error_free(error);
+                show_info_dialog(app, "Clipboard does not contain an image or supported image file.");
+                return;
+            }
+
+            GByteArray *buffer = g_byte_array_new();
+            guint8 chunk[4096];
+            while (true) {
+                gssize n = g_input_stream_read(stream, chunk, sizeof(chunk), nullptr, &error);
+                if (n > 0) {
+                    g_byte_array_append(buffer, chunk, static_cast<guint>(n));
+                    continue;
+                }
+                if (n < 0 && error) g_error_free(error);
+                break;
+            }
+            g_object_unref(stream);
+
+            std::string payload(
+                reinterpret_cast<const char*>(buffer->data),
+                buffer->len);
+            g_byte_array_unref(buffer);
+
+            if (!load_first_clipboard_file(app, payload)) {
+                show_info_dialog(app, "Clipboard does not contain an image or supported image file.");
+            }
+        },
+        app);
+}
+
+static void on_paste_clicked(GtkButton *btn, gpointer user_data) {
+    AppState *app = static_cast<AppState*>(user_data);
+    (void)btn;
+
+    GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(app->window));
+    if (!display) {
+        show_error_dialog(app, "Clipboard is not available.");
+        return;
+    }
+
+    GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+    gdk_clipboard_read_texture_async(clipboard, nullptr,
+        [](GObject *source, GAsyncResult *result, gpointer data) {
+            AppState *app = static_cast<AppState*>(data);
+            GError *error = nullptr;
+            GdkTexture *texture = gdk_clipboard_read_texture_finish(
+                GDK_CLIPBOARD(source), result, &error);
+
+            if (!texture) {
+                if (error) g_error_free(error);
+                read_clipboard_file_list(app, GDK_CLIPBOARD(source));
+                return;
+            }
+
+            cv::Mat image = gdk_texture_to_mat(texture);
+            g_object_unref(texture);
+            load_image_from_mat(app, image, "clipboard.png");
+            gtk_label_set_text(app->status_label,
+                ("Pasted image from clipboard  " +
+                 std::to_string(app->current_image.cols) + "×" +
+                 std::to_string(app->current_image.rows) + " px").c_str());
+        },
+        app);
 }
 
 // Called on main thread via g_idle_add once the worker thread finishes
@@ -2048,6 +2291,8 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl,
         if (keyval == GDK_KEY_y || keyval == GDK_KEY_Z) { on_redo_clicked(nullptr, app); return TRUE; }
         if (keyval == GDK_KEY_o) { on_open_clicked(nullptr, app); return TRUE; }
         if (keyval == GDK_KEY_s) { on_save_clicked(nullptr, app); return TRUE; }
+        if (keyval == GDK_KEY_c || keyval == GDK_KEY_C) { on_copy_clicked(nullptr, app); return TRUE; }
+        if (keyval == GDK_KEY_v || keyval == GDK_KEY_V) { on_paste_clicked(nullptr, app); return TRUE; }
         if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) {
             do_erase(app); return TRUE;
         }
@@ -2152,6 +2397,18 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     g_signal_connect(btn_open, "clicked", G_CALLBACK(on_open_clicked), app);
     app->btn_open = GTK_BUTTON(btn_open);
     adw_header_bar_pack_start(header, btn_open);
+
+    GtkWidget *btn_paste = gtk_button_new_from_icon_name("edit-paste-symbolic");
+    gtk_widget_set_tooltip_text(btn_paste, "Paste image from clipboard (Ctrl+V)");
+    g_signal_connect(btn_paste, "clicked", G_CALLBACK(on_paste_clicked), app);
+    app->btn_paste = GTK_BUTTON(btn_paste);
+    adw_header_bar_pack_start(header, btn_paste);
+
+    GtkWidget *btn_copy = gtk_button_new_from_icon_name("edit-copy-symbolic");
+    gtk_widget_set_tooltip_text(btn_copy, "Copy image to clipboard (Ctrl+C)");
+    g_signal_connect(btn_copy, "clicked", G_CALLBACK(on_copy_clicked), app);
+    app->btn_copy = GTK_BUTTON(btn_copy);
+    adw_header_bar_pack_start(header, btn_copy);
 
     GtkWidget *btn_save = gtk_button_new_from_icon_name("document-save-as-symbolic");
     gtk_widget_set_tooltip_text(btn_save, "Save as… (Ctrl+S)");
