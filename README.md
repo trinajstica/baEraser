@@ -7,27 +7,27 @@ Draw a mask over an unwanted object and erase it using classical inpainting or A
 
 | Empty workspace | Image loaded |
 |---|---|
-| ![baEraser empty workspace](images/img1.jpg) | ![baEraser image loaded with LaMa AI selected](images/img2.jpg) |
+| ![img1](images/img1.jpg) | ![img2](images/img2.jpg) |
 
 | Mask selected | Result after inpainting |
 |---|---|
-| ![baEraser mask selected for removal](images/img3.jpg) | ![baEraser result after LaMa AI inpainting](images/img4.jpg) |
+| ![img3](images/img3.jpg) | ![img4](images/img4.jpg) |
 
 | AI image loaded | Brush mask selected |
 |---|---|
-| ![baEraser AI-generated image loaded](images/img5.jpg) | ![baEraser brush mask selected on AI-generated image](images/img6.jpg) |
+| ![img5](images/img5.jpg) | ![img6](images/img6.jpg) |
 
 | Result after AI inpainting | Empty workspace |
 |---|---|
-| ![baEraser result after AI inpainting on generated image](images/img7.jpg) | ![baEraser empty workspace with updated controls](images/img8.jpg) |
+| ![img7](images/img7.jpg) | ![img8](images/img8.jpg) |
 
 | Image loaded | Mask selected |
 |---|---|
-| ![baEraser image loaded with AI watermark](images/img9.jpg) | ![baEraser mask selected over AI watermark](images/img10.jpg) |
+| ![img9](images/img9.jpg) | ![img10](images/img10.jpg) |
 
 | Result after watermark removal |
 |---|
-| ![baEraser result after AI watermark removal](images/img11.jpg) |
+| ![img11](images/img11.jpg) |
 
 ## Installation
 
