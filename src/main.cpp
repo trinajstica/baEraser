@@ -72,6 +72,7 @@ static void update_button_states(AppState *app);
 static void show_error_dialog(AppState *app, const std::string &message);
 static void show_info_dialog(AppState *app, const std::string &message);
 static void on_uri_launch_done(GObject *source_object, GAsyncResult *result, gpointer user_data);
+static void on_open_files(GtkApplication *gtk_app, GFile **files, gint n_files, const gchar *hint, gpointer user_data);
 static cv::Mat gdk_pixbuf_to_mat(GdkPixbuf *pixbuf);
 static gboolean fit_image_idle(gpointer user_data);
 static void rebuild_image_surface(AppState *app);
@@ -166,6 +167,8 @@ struct AppState {
     double     drag_start_y = 0.0;
     double     drag_cur_x   = 0.0;
     double     drag_cur_y   = 0.0;
+    double     brush_last_x = 0.0;
+    double     brush_last_y = 0.0;
     cv::Mat    move_mask_snapshot;
     cv::Rect   move_source_snapshot;
     int        brush_radius = 20;
@@ -1260,6 +1263,15 @@ static void draw_brush_on_mask(AppState *app, int px, int py) {
     finish_mask_change(app);
 }
 
+static void draw_brush_line_on_mask(AppState *app, cv::Point p0, cv::Point p1) {
+    if (!app->has_image) return;
+    int r = app->brush_radius;
+    int thickness = std::max(1, r * 2);
+    cv::line(app->mask, p0, p1, cv::Scalar(255), thickness, cv::LINE_AA);
+    cv::circle(app->mask, p1, r, cv::Scalar(255), -1, cv::LINE_AA);
+    finish_mask_change(app);
+}
+
 static void draw_rect_on_mask(AppState *app, cv::Point p0, cv::Point p1) {
     if (!app->has_image) return;
     int x0 = std::clamp(std::min(p0.x, p1.x), 0, app->mask.cols - 1);
@@ -1384,6 +1396,8 @@ static void on_draw_drag_begin(GtkGestureDrag *gesture, double x, double y, gpoi
     app->drag_start_y = ip.y;
     app->drag_cur_x   = ip.x;
     app->drag_cur_y   = ip.y;
+    app->brush_last_x = ip.x;
+    app->brush_last_y = ip.y;
 
     if (app->tool == DrawTool::BRUSH && app->mode == AppMode::NORMAL) {
         draw_brush_on_mask(app, ip.x, ip.y);
@@ -1426,7 +1440,11 @@ static void on_draw_drag_update(GtkGestureDrag *gesture, double dx, double dy, g
     }
 
     if (app->tool == DrawTool::BRUSH && app->mode == AppMode::NORMAL) {
-        draw_brush_on_mask(app, ip.x, ip.y);
+        cv::Point prev = {(int)std::round(app->brush_last_x),
+                          (int)std::round(app->brush_last_y)};
+        draw_brush_line_on_mask(app, prev, ip);
+        app->brush_last_x = ip.x;
+        app->brush_last_y = ip.y;
     }
     gtk_widget_queue_draw(GTK_WIDGET(app->canvas));
 }
@@ -1638,7 +1656,8 @@ static void on_save_clicked(GtkButton *btn, gpointer user_data) {
                 if (path) {
                     std::string spath(path);
                     // Ensure .png extension if none
-                    if (spath.find('.') == std::string::npos) spath += ".png";
+                    if (!std::filesystem::path(spath).has_extension())
+                        spath += ".png";
 
                     bool ok = cv::imwrite(spath, app->current_image);
                     if (!ok) {
@@ -2158,6 +2177,8 @@ static void on_clear_mask_clicked(GtkButton *btn, gpointer user_data) {
     AppState *app = static_cast<AppState*>(user_data);
     (void)btn;
     if (!app->has_image) return;
+    if (!app->mask.empty() && cv::countNonZero(app->mask) > 0)
+        app->push_undo();
     clear_mask(app);
     update_button_states(app);
     if (app->mode == AppMode::PICK_DEST && app->source_rect_set)
@@ -2830,6 +2851,28 @@ static void on_activate(GtkApplication *gtk_app, gpointer user_data) {
     gtk_window_present(GTK_WINDOW(app->window));
 }
 
+static void on_open_files(GtkApplication *gtk_app, GFile **files, gint n_files,
+                          const gchar *hint, gpointer user_data) {
+    AppState *app = static_cast<AppState*>(user_data);
+    (void)hint;
+
+    if (!app->window)
+        on_activate(gtk_app, user_data);
+
+    if (n_files < 1 || !files || !files[0])
+        return;
+
+    gchar *path = g_file_get_path(files[0]);
+    if (path) {
+        load_image_from_path(app, path);
+        g_free(path);
+    } else {
+        show_error_dialog(app, "Cannot open this image location.");
+    }
+
+    gtk_window_present(GTK_WINDOW(app->window));
+}
+
 // ─────────────────────────────────────────────
 // main
 // ─────────────────────────────────────────────
@@ -2837,8 +2880,9 @@ int main(int argc, char *argv[]) {
     AppState app;
 
     AdwApplication *adw_app = adw_application_new(
-        "si.generacija.baEraser", G_APPLICATION_DEFAULT_FLAGS);
+        "si.generacija.baEraser", G_APPLICATION_HANDLES_OPEN);
     g_signal_connect(adw_app, "activate", G_CALLBACK(on_activate), &app);
+    g_signal_connect(adw_app, "open", G_CALLBACK(on_open_files), &app);
 
     int status = g_application_run(G_APPLICATION(adw_app), argc, argv);
     g_object_unref(adw_app);

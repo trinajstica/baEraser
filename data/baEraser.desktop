@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=baEraser
 Comment=Remove objects from images using AI inpainting
-Exec=baEraser
+Exec=baEraser %F
 Icon=baEraser
 Type=Application
 Categories=Graphics;RasterGraphics;
